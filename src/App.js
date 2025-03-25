@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { HubConnectionBuilder } from '@microsoft/signalr';
+import { io } from 'socket.io-client';
 import SimplePeer from 'simple-peer';
 
 const App = () => {
@@ -24,48 +24,42 @@ const App = () => {
   // 1. Подключение к комнате после авторизации
   useEffect(() => {
     if (!isAuthenticated) return;
-
-    const connectToRoom = async () => {
-      const connection = new HubConnectionBuilder()
-        .withUrl("https://mug1vara97-webrtctestback-3c3a.twc1.net/webrtchub")
-        .withAutomaticReconnect()
-        .build();
-
-      try {
-        await connection.start();
-        console.log("SignalR connection established");
-        
-        // Регистрируем обработчики событий
-        connection.on("UserJoined", (newUserId) => {
-          console.log("User joined:", newUserId);
-          setOtherUsers(prev => [...prev, newUserId]);
-          if (localStreamRef.current) {
-            initiateCall(newUserId, localStreamRef.current);
-          }
-        });
-
-        connection.on("UserLeft", (leftUserId) => {
-          console.log("User left:", leftUserId);
-          setOtherUsers(prev => prev.filter(id => id !== leftUserId));
-        });
-
-        connection.on("ReceiveSignal", (senderId, signal) => {
-          console.log("Signal received from:", senderId);
-          peerRef.current?.signal(JSON.parse(signal));
-        });
-
-        await connection.invoke("JoinRoom", roomId, username)
-        .catch(err => console.error("Failed to join room:", err));
-        
-      } catch (err) {
-        console.error("Connection error:", err);
+  
+    const socket = io('https://mug1vara97-webrtcb-1778.twc1.net', {
+      transports: ['websocket']
+    });
+  
+    socket.on('connect', () => {
+      console.log('Socket.IO connected');
+      socket.emit('joinRoom', { roomId, username });
+    });
+  
+    socket.on('usersInRoom', (users) => {
+      setOtherUsers(users);
+      if (localStreamRef.current) {
+        users.forEach(userId => initiateCall(userId, localStreamRef.current));
       }
-    };
-
-    connectToRoom();
-
+    });
+  
+    socket.on('userJoined', (newUserId) => {
+      setOtherUsers(prev => [...prev, newUserId]);
+      if (localStreamRef.current) {
+        initiateCall(newUserId, localStreamRef.current);
+      }
+    });
+  
+    socket.on('userLeft', (leftUserId) => {
+      setOtherUsers(prev => prev.filter(id => id !== leftUserId));
+    });
+  
+    socket.on('receiveSignal', ({ senderId, signal }) => {
+      peerRef.current?.signal(signal);
+    });
+  
+    connectionRef.current = socket;
+  
     return () => {
-      connectionRef.current?.stop();
+      socket.disconnect();
       peerRef.current?.destroy();
     };
   }, [isAuthenticated, username]);
@@ -104,30 +98,34 @@ const App = () => {
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun.109.73.198.135:3478' }
     ];
-
+  
     const peer = new SimplePeer({
       initiator: true,
       stream: localStream,
       config: { iceServers },
       trickle: false
     });
-
+  
     peer.on('signal', data => {
       console.log("Sending signal to", targetUserId);
-      connectionRef.current?.invoke("SendSignal", targetUserId, JSON.stringify(data));
+      // Заменили invoke на emit для Socket.IO
+      connectionRef.current?.emit("sendSignal", { 
+        targetUsername: targetUserId, 
+        signal: JSON.stringify(data) 
+      });
     });
-
+  
     peer.on('stream', remoteStream => {
       console.log("Received remote stream from", targetUserId);
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteStream;
       }
     });
-
+  
     peer.on('error', err => {
       console.error("WebRTC error with", targetUserId, ":", err);
     });
-
+  
     peerRef.current = peer;
   };
 
