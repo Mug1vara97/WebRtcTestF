@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "browser": {
-  "process": false,
-  "buffer": false,
-  "stream": false
+    "process": false,
+    "buffer": false,
+    "stream": false
   },
   "dependencies": {
     "@microsoft/signalr": "^8.0.7",

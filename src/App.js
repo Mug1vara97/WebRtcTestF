@@ -4,7 +4,16 @@ import SimplePeer from 'simple-peer';
 
 // Добавьте полифиллы в начале файла
 import { Buffer } from 'buffer';
+import process from 'process';
+import './polyfills';
+
 window.Buffer = Buffer;
+window.process = process;
+
+
+window.process.nextTick = (callback) => {
+  setTimeout(callback, 0);
+};
 
 const App = () => {
   const [username, setUsername] = useState('');
@@ -15,6 +24,7 @@ const App = () => {
   const localStreamRef = useRef(null);
   const peersRef = useRef({});
   const roomId = "1";
+  const [remoteStreams, setRemoteStreams] = useState({});
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -103,7 +113,7 @@ const App = () => {
       config: {
         iceServers: [
           { 
-            urls: 'turn:turn.109.73.198.135:3478'
+            urls: 'stun:stun.109.73.198.135:3478'
           }
         ]
       },
@@ -118,16 +128,12 @@ const App = () => {
     });
 
     peer.on('stream', stream => {
+      setRemoteStreams(prev => ({
       // Создаем новый элемент video для каждого пользователя
-      const videoContainer = document.getElementById('remote-videos');
-      const videoElement = document.createElement('video');
-      videoElement.autoplay = true;
-      videoElement.playsInline = true;
-      videoElement.srcObject = stream;
-      videoElement.style.width = '300px';
-      videoElement.style.border = '1px solid #ccc';
-      videoElement.id = `video-${userId}`;
-      videoContainer.appendChild(videoElement);
+      ...prev,
+      [userId]: stream
+    }));
+      
     });
 
     peer.on('error', err => {
@@ -136,8 +142,11 @@ const App = () => {
     });
 
     peer.on('close', () => {
-      const videoElement = document.getElementById(`video-${userId}`);
-      if (videoElement) videoElement.remove();
+      setRemoteStreams(prev => {
+        const newStreams = { ...prev };
+        delete newStreams[userId];
+        return newStreams;
+      });
       delete peersRef.current[userId];
     });
 
@@ -172,7 +181,7 @@ const App = () => {
       <p>Вы: {username}</p>
       <p>Участники: {otherUsers.length ? otherUsers.join(', ') : 'нет других участников'}</p>
       
-      <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
+      <div style={{ display: 'flex', gap: '20px', marginTop: '20px', flexWrap: 'wrap' }}>
         <video 
           ref={localVideoRef} 
           autoPlay 
@@ -180,7 +189,19 @@ const App = () => {
           playsInline 
           style={{ width: '300px', border: '1px solid #ccc' }}
         />
-        <div id="remote-videos"></div>
+        
+        {/* Отображаем все удаленные потоки */}
+        {Object.entries(remoteStreams).map(([userId, stream]) => (
+          <video
+            key={userId}
+            autoPlay
+            playsInline
+            ref={el => {
+              if (el) el.srcObject = stream;
+            }}
+            style={{ width: '300px', border: '1px solid #ccc' }}
+          />
+        ))}
       </div>
     </div>
   );
