@@ -2,19 +2,20 @@ import React, { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import SimplePeer from 'simple-peer';
 
+// Добавьте полифиллы в начале файла
+import { Buffer } from 'buffer';
+window.Buffer = Buffer;
+
 const App = () => {
   const [username, setUsername] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [otherUsers, setOtherUsers] = useState([]);
-  const peerRef = useRef(null);
   const connectionRef = useRef(null);
   const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
   const localStreamRef = useRef(null);
-  const roomId = "1"; // Статичный ID комнаты
   const peersRef = useRef({});
+  const roomId = "1";
 
-  // Авторизация
   const handleLogin = (e) => {
     e.preventDefault();
     if (username.trim()) {
@@ -22,7 +23,7 @@ const App = () => {
     }
   };
 
-  // 1. Подключение к комнате после авторизации
+  // Подключение к комнате
   useEffect(() => {
     if (!isAuthenticated) return;
   
@@ -37,35 +38,37 @@ const App = () => {
   
     socket.on('usersInRoom', (users) => {
       setOtherUsers(users);
-      if (localStreamRef.current) {
-        users.forEach(userId => initiateCall(userId, localStreamRef.current));
-      }
     });
   
     socket.on('userJoined', (newUserId) => {
       setOtherUsers(prev => [...prev, newUserId]);
-      if (localStreamRef.current) {
-        initiateCall(newUserId, localStreamRef.current);
-      }
     });
   
     socket.on('userLeft', (leftUserId) => {
       setOtherUsers(prev => prev.filter(id => id !== leftUserId));
+      if (peersRef.current[leftUserId]) {
+        peersRef.current[leftUserId].destroy();
+        delete peersRef.current[leftUserId];
+      }
     });
   
     socket.on('receiveSignal', ({ senderId, signal }) => {
-      peerRef.current?.signal(signal);
+      if (peersRef.current[senderId]) {
+        peersRef.current[senderId].signal(signal);
+      } else if (localStreamRef.current) {
+        createPeer(senderId, false, signal);
+      }
     });
   
     connectionRef.current = socket;
   
     return () => {
       socket.disconnect();
-      peerRef.current?.destroy();
+      Object.values(peersRef.current).forEach(peer => peer.destroy());
     };
   }, [isAuthenticated, username]);
 
-  // 2. Получение медиапотока после входа в комнату
+  // Получение медиапотока
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -76,15 +79,12 @@ const App = () => {
           audio: true 
         });
         localStreamRef.current = stream;
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
+        localVideoRef.current.srcObject = stream;
         
-        // Инициируем звонки с существующими пользователями
+        // Инициируем звонки
         otherUsers.forEach(userId => {
-          initiateCall(userId, stream);
+          createPeer(userId, true);
         });
-        
       } catch (err) {
         console.error("Failed to get media stream:", err);
       }
@@ -93,40 +93,59 @@ const App = () => {
     getMediaStream();
   }, [isAuthenticated, otherUsers]);
 
-  // Функция инициализации звонка
-  const initiateCall = (targetUserId, localStream) => {
-    const iceServers = [
-      { urls: 'turn:turn.109.73.198.135:3478' }
-    ];
-  
+  // Создание пира
+  const createPeer = (userId, initiator, signal = null) => {
+    if (peersRef.current[userId]) return;
+
     const peer = new SimplePeer({
-      initiator: true,
-      stream: localStream,
-      config: { iceServers },
+      initiator,
+      stream: initiator ? localStreamRef.current : null,
+      config: {
+        iceServers: [
+          { 
+            urls: 'turn:turn.109.73.198.135:3478'
+          }
+        ]
+      },
       trickle: false
     });
-  
+
     peer.on('signal', data => {
-      console.log("Sending signal to", targetUserId);
-      // Заменили invoke на emit для Socket.IO
-      connectionRef.current?.emit("sendSignal", { 
-        targetUsername: targetUserId, 
-        signal: JSON.stringify(data) 
+      connectionRef.current?.emit('sendSignal', {
+        targetUsername: userId,
+        signal: JSON.stringify(data)
       });
     });
-  
-    peer.on('stream', remoteStream => {
-      console.log("Received remote stream from", targetUserId);
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-      }
+
+    peer.on('stream', stream => {
+      // Создаем новый элемент video для каждого пользователя
+      const videoContainer = document.getElementById('remote-videos');
+      const videoElement = document.createElement('video');
+      videoElement.autoplay = true;
+      videoElement.playsInline = true;
+      videoElement.srcObject = stream;
+      videoElement.style.width = '300px';
+      videoElement.style.border = '1px solid #ccc';
+      videoElement.id = `video-${userId}`;
+      videoContainer.appendChild(videoElement);
     });
-  
+
     peer.on('error', err => {
-      console.error("WebRTC error with", targetUserId, ":", err);
+      console.error('Peer error:', err);
+      delete peersRef.current[userId];
     });
-  
-    peerRef.current = peer;
+
+    peer.on('close', () => {
+      const videoElement = document.getElementById(`video-${userId}`);
+      if (videoElement) videoElement.remove();
+      delete peersRef.current[userId];
+    });
+
+    if (signal) {
+      peer.signal(signal);
+    }
+
+    peersRef.current[userId] = peer;
   };
 
   if (!isAuthenticated) {
@@ -161,12 +180,7 @@ const App = () => {
           playsInline 
           style={{ width: '300px', border: '1px solid #ccc' }}
         />
-        <video 
-          ref={remoteVideoRef} 
-          autoPlay 
-          playsInline 
-          style={{ width: '300px', border: '1px solid #ccc' }}
-        />
+        <div id="remote-videos"></div>
       </div>
     </div>
   );
