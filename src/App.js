@@ -27,7 +27,7 @@ const App = () => {
 
     const connectToRoom = async () => {
       const connection = new HubConnectionBuilder()
-        .withUrl("http://mug1vara97-webrtctestb-f946.twc1.net/webrtchub")
+        .withUrl("https://mug1vara97-webrtctestback-3c3a.twc1.net/webrtchub")
         .withAutomaticReconnect()
         .build();
 
