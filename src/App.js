@@ -95,11 +95,8 @@ const App = () => {
 
   // Функция инициализации звонка
   const initiateCall = (targetUserId, localStream) => {
-    if (peersRef.current[targetUserId]) return;
-  
     const iceServers = [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun.109.73.198.135:3478' }
+      { urls: 'turn:turn.109.73.198.135:3478' }
     ];
   
     const peer = new SimplePeer({
@@ -110,90 +107,46 @@ const App = () => {
     });
   
     peer.on('signal', data => {
-      connectionRef.current?.emit("sendSignal", {
-        targetUsername: targetUserId,
-        signal: JSON.stringify(data)
+      console.log("Sending signal to", targetUserId);
+      // Заменили invoke на emit для Socket.IO
+      connectionRef.current?.emit("sendSignal", { 
+        targetUsername: targetUserId, 
+        signal: JSON.stringify(data) 
       });
     });
   
     peer.on('stream', remoteStream => {
-      // Создаем новый элемент video для каждого пользователя
-      const newVideo = document.createElement('video');
-      newVideo.autoplay = true;
-      newVideo.playsInline = true;
-      newVideo.srcObject = remoteStream;
-      newVideo.style.width = '300px';
-      newVideo.style.border = '1px solid #ccc';
-      document.getElementById('videos-container').appendChild(newVideo);
+      console.log("Received remote stream from", targetUserId);
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+      }
     });
   
     peer.on('error', err => {
-      console.error("WebRTC error:", err);
-      delete peersRef.current[targetUserId];
+      console.error("WebRTC error with", targetUserId, ":", err);
     });
   
-    peersRef.current[targetUserId] = peer;
+    peerRef.current = peer;
   };
-  
-  // Добавляем обработку входящих сигналов
-  useEffect(() => {
-    if (!connectionRef.current) return;
-  
-    const handleReceiveSignal = ({ senderId, signal }) => {
-      if (!localStreamRef.current) return;
-  
-      // Если пира еще нет - создаем
-      if (!peersRef.current[senderId]) {
-        const iceServers = [
-          { urls: 'turn:turn.109.73.198.135:3478' }
-        ];
-  
-        const peer = new SimplePeer({
-          initiator: false,
-          stream: localStreamRef.current,
-          config: { iceServers },
-          trickle: false
-        });
-  
-        peer.on('signal', data => {
-          connectionRef.current?.emit("sendSignal", {
-            targetUsername: senderId,
-            signal: JSON.stringify(data)
-          });
-        });
-  
-        peer.on('stream', remoteStream => {
-          const newVideo = document.createElement('video');
-          newVideo.autoplay = true;
-          newVideo.playsInline = true;
-          newVideo.srcObject = remoteStream;
-          newVideo.style.width = '300px';
-          newVideo.style.border = '1px solid #ccc';
-          document.getElementById('videos-container').appendChild(newVideo);
-        });
-  
-        peer.on('error', err => {
-          console.error("WebRTC error:", err);
-          delete peersRef.current[senderId];
-        });
-  
-        peersRef.current[senderId] = peer;
-      }
-  
-      // Передаем сигнал пиру
-      peersRef.current[senderId]?.signal(signal);
-    };
-  
-    connectionRef.current.on('receiveSignal', handleReceiveSignal);
-  
-    return () => {
-      if (connectionRef.current) {
-        connectionRef.current.off('receiveSignal', handleReceiveSignal);
-      }
-    };
-  }, [localStreamRef.current]);
-  
-  // Обновляем JSX для отображения видео
+
+  if (!isAuthenticated) {
+    return (
+      <div style={{ padding: '20px' }}>
+        <h2>Вход в видеокомнату</h2>
+        <form onSubmit={handleLogin}>
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Введите ваше имя"
+            required
+          />
+          <button type="submit">Войти</button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: '20px' }}>
       <h2>Комната #{roomId}</h2>
@@ -208,7 +161,12 @@ const App = () => {
           playsInline 
           style={{ width: '300px', border: '1px solid #ccc' }}
         />
-        <div id="videos-container"></div>
+        <video 
+          ref={remoteVideoRef} 
+          autoPlay 
+          playsInline 
+          style={{ width: '300px', border: '1px solid #ccc' }}
+        />
       </div>
     </div>
   );
