@@ -6,6 +6,8 @@ const App = () => {
   const [username, setUsername] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [otherUsers, setOtherUsers] = useState([]);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
   const connectionRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
@@ -13,6 +15,27 @@ const App = () => {
   const peersRef = useRef({});
   const roomId = "1";
   const [isLoading, setIsLoading] = useState(false);
+
+  // Функции для управления медиа
+  const toggleMute = () => {
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = !track.enabled;
+      });
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStreamRef.current) {
+      const videoTracks = localStreamRef.current.getVideoTracks();
+      videoTracks.forEach(track => {
+        track.enabled = !track.enabled;
+      });
+      setIsVideoOff(!isVideoOff);
+    }
+  };
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -83,7 +106,6 @@ const App = () => {
     };
   }, [isAuthenticated, username]);
 
-  // Получение медиапотока
   useEffect(() => {
     if (!isAuthenticated) return;
   
@@ -202,6 +224,35 @@ const App = () => {
       <p>Вы: {username}</p>
       <p>Участники: {otherUsers.length ? otherUsers.join(', ') : 'нет других участников'}</p>
       
+      <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
+        <button
+          onClick={toggleMute}
+          style={{
+            backgroundColor: isMuted ? '#ff4444' : '#4CAF50',
+            color: 'white',
+            padding: '8px 16px',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
+        >
+          {isMuted ? 'Включить микрофон' : 'Выключить микрофон'}
+        </button>
+        <button
+          onClick={toggleVideo}
+          style={{
+            backgroundColor: isVideoOff ? '#ff4444' : '#4CAF50',
+            color: 'white',
+            padding: '8px 16px',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
+        >
+          {isVideoOff ? 'Включить камеру' : 'Выключить камеру'}
+        </button>
+      </div>
+      
       <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
         <div>
           <h3>Ваша камера</h3>
@@ -210,8 +261,25 @@ const App = () => {
             autoPlay 
             muted 
             playsInline 
-            style={{ width: '300px', border: '1px solid #ccc' }}
+            style={{ 
+              width: '300px', 
+              border: '1px solid #ccc',
+              display: isVideoOff ? 'none' : 'block'
+            }}
           />
+          {isVideoOff && (
+            <div style={{
+              width: '300px',
+              height: '225px',
+              backgroundColor: '#f0f0f0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '1px solid #ccc'
+            }}>
+              Камера выключена
+            </div>
+          )}
         </div>
         
         <div>
