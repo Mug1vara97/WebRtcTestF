@@ -9,14 +9,13 @@ window.process = require('process');
 const App = () => {
   const [username, setUsername] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [otherUsers, setOtherUsers] = useState([]);
   const connectionRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
   const localStreamRef = useRef(null);
   const peersRef = useRef({});
   const roomId = "1";
-  const [initialUsers, setInitialUsers] = useState([]);
-  const [otherUsers, setOtherUsers] = useState([]);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -25,16 +24,12 @@ const App = () => {
     }
   };
 
-  // Подключение к комнате с оптимизацией Socket.IO
+  // Подключение к комнате
   useEffect(() => {
     if (!isAuthenticated) return;
   
     const socket = io('https://mug1vara97-webrtcb-1778.twc1.net', {
-      transports: ['websocket'],
-      upgrade: false,
-      rememberUpgrade: true,
-      pingTimeout: 3000,
-      pingInterval: 5000
+      transports: ['websocket']
     });
   
     socket.on('connect', () => {
@@ -43,10 +38,7 @@ const App = () => {
     });
   
     socket.on('usersInRoom', (users) => {
-      // Фильтруем текущего пользователя, если он есть
-      const filteredUsers = users.filter(user => user !== username);
-      setInitialUsers(filteredUsers);
-      setOtherUsers(filteredUsers);
+      setOtherUsers(users);
     });
   
     socket.on('userJoined', (newUserId) => {
@@ -81,42 +73,16 @@ const App = () => {
     };
   }, [isAuthenticated, username]);
 
-  useEffect(() => {
-    if (!isAuthenticated || !localStreamRef.current) return;
-  
-    initialUsers.forEach(userId => {
-      createPeer(userId, true);
-    });
-  }, [isAuthenticated, initialUsers]);
-
-  // Получение медиапотока с оптимизацией параметров
+  // Получение медиапотока
   useEffect(() => {
     if (!isAuthenticated) return;
 
     const getMediaStream = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            frameRate: { ideal: 24, max: 30 }
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            channelCount: 1 // Моно для уменьшения нагрузки
-          }
+          video: true, 
+          audio: true 
         });
-        
-        // Применяем дополнительные ограничения
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          await videoTrack.applyConstraints({
-            advanced: [{ frameRate: { max: 24 } }]
-          });
-        }
-
         localStreamRef.current = stream;
         localVideoRef.current.srcObject = stream;
         
@@ -130,15 +96,15 @@ const App = () => {
     };
 
     getMediaStream();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, otherUsers]);
 
-  // Создание пира с оптимизацией WebRTC
+  // Создание пира
   const createPeer = (userId, initiator, signal = null) => {
     if (peersRef.current[userId]) return;
 
     const peer = new SimplePeer({
       initiator,
-      stream: localStreamRef.current,
+      stream: localStreamRef.current, // Всегда добавляем свой поток
       config: {
         iceServers: [
           {
@@ -149,21 +115,9 @@ const App = () => {
           {
             urls: 'stun:stun.l.google.com:19302'
           }
-        ],
-        iceTransportPolicy: 'all' // Используем и STUN и TURN
+        ]
       },
-      trickle: true, // Включаем trickle ICE
-      offerOptions: {
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      },
-      sdpTransform: (sdp) => {
-        // Оптимизация SDP для уменьшения задержки
-        return sdp
-          .replace(/a=fmtp:\d+ .*level-asymmetry-allowed=.*\r\n/g, '')
-          .replace(/a=rtcp-fb:\d+ .*\r\n/g, '')
-          .replace(/a=extmap:\d+ .*\r\n/g, '');
-      }
+      trickle: false
     });
 
     peer.on('signal', data => {
@@ -174,13 +128,11 @@ const App = () => {
     });
 
     peer.on('stream', stream => {
-      if (!stream || !stream.getTracks().length) return;
-      
+      // Создаем новый элемент video для каждого пользователя
       if (!remoteVideoRefs.current[userId]) {
         remoteVideoRefs.current[userId] = document.createElement('video');
         remoteVideoRefs.current[userId].autoplay = true;
         remoteVideoRefs.current[userId].playsInline = true;
-        remoteVideoRefs.current[userId].setAttribute('playsinline', '');
         document.getElementById('remoteVideosContainer').appendChild(remoteVideoRefs.current[userId]);
       }
       remoteVideoRefs.current[userId].srcObject = stream;
