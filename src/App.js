@@ -47,8 +47,19 @@ const App = () => {
       const filteredUsers = users.filter(user => user !== username);
       setOtherUsers(filteredUsers);
       
-      // Инициируем соединения только если мы новый пользователь
-      if (localStreamRef.current && filteredUsers.length > 0) {
+      // Ждем получения локального потока перед созданием пиров
+      if (!localStreamRef.current) {
+        const checkStream = setInterval(() => {
+          if (localStreamRef.current) {
+            clearInterval(checkStream);
+            filteredUsers.forEach(userId => {
+              if (!peersRef.current[userId]) {
+                createPeer(userId, true);
+              }
+            });
+          }
+        }, 100);
+      } else {
         filteredUsers.forEach(userId => {
           if (!peersRef.current[userId]) {
             createPeer(userId, true);
@@ -77,17 +88,17 @@ const App = () => {
     });
   
     connectionRef.current = socket;
-  
-    return () => {
-      socket.disconnect();
-      Object.values(peersRef.current).forEach(peer => peer.destroy());
-    };
-  }, [isAuthenticated, username]);
+
+  return () => {
+    socket.disconnect();
+    Object.values(peersRef.current).forEach(peer => peer.destroy());
+  };
+}, [isAuthenticated, username]);
 
   // Получение медиапотока
   useEffect(() => {
     if (!isAuthenticated) return;
-
+  
     const getMediaStream = async () => {
       try {
         const constraints = {
@@ -100,14 +111,23 @@ const App = () => {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
-            channelCount: 1 // Используем моно-аудио для лучшей совместимости
+            channelCount: 1
           }
         };
-
+  
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         localStreamRef.current = stream;
         localVideoRef.current.srcObject = stream;
-        
+  
+        // После получения потока инициируем соединения с уже подключенными пользователями
+        if (connectionRef.current && otherUsers.length > 0) {
+          otherUsers.forEach(userId => {
+            if (!peersRef.current[userId]) {
+              createPeer(userId, true);
+            }
+          });
+        }
+  
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
           await videoTrack.applyConstraints({
@@ -119,13 +139,15 @@ const App = () => {
         setIsLoading(false);
       }
     };
-
+  
     getMediaStream();
   }, [isAuthenticated]);
 
   const createPeer = (userId, initiator, signal = null) => {
-    if (peersRef.current[userId]) return;
-
+    if (peersRef.current[userId] || !localStreamRef.current) return;
+  
+    console.log(`Creating peer connection with ${userId}, initiator: ${initiator}`);
+  
     const peer = new SimplePeer({
       initiator,
       stream: localStreamRef.current,
@@ -140,7 +162,7 @@ const App = () => {
             urls: 'stun:stun.l.google.com:19302'
           }
         ],
-        iceTransportPolicy: 'all' // Используем и STUN и TURN
+        iceTransportPolicy: 'all'
       },
       trickle: true,
       offerOptions: {
@@ -148,15 +170,17 @@ const App = () => {
         offerToReceiveVideo: true
       }
     });
-
+  
     peer.on('signal', data => {
+      console.log(`Sending signal to ${userId}`);
       connectionRef.current?.emit('sendSignal', {
         targetUsername: userId,
         signal: JSON.stringify(data)
       });
     });
-
+  
     peer.on('stream', stream => {
+      console.log(`Received stream from ${userId}`);
       if (!stream || !stream.getTracks().length) return;
       
       if (!remoteVideoRefs.current[userId]) {
@@ -183,13 +207,14 @@ const App = () => {
 
     if (signal) {
       try {
+        console.log(`Receiving signal from ${userId}`);
         peer.signal(JSON.parse(signal));
       } catch (err) {
         console.error('Signal parsing error:', err);
         cleanupPeer(userId);
       }
     }
-
+  
     peersRef.current[userId] = peer;
   };
 
