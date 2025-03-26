@@ -47,8 +47,8 @@ const App = () => {
       const filteredUsers = users.filter(user => user !== username);
       setOtherUsers(filteredUsers);
       
-      // Только новый пользователь инициирует соединения
-      if (localStreamRef.current) {
+      // Инициируем соединения только если мы новый пользователь
+      if (localStreamRef.current && filteredUsers.length > 0) {
         filteredUsers.forEach(userId => {
           if (!peersRef.current[userId]) {
             createPeer(userId, true);
@@ -69,7 +69,6 @@ const App = () => {
     });
   
     socket.on('receiveSignal', ({ senderId, signal }) => {
-      // Только отвечаем на сигналы, не инициируем новые соединения
       if (!peersRef.current[senderId] && localStreamRef.current) {
         createPeer(senderId, false, signal);
       } else if (peersRef.current[senderId]) {
@@ -100,7 +99,8 @@ const App = () => {
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true
+            autoGainControl: true,
+            channelCount: 1 // Используем моно-аудио для лучшей совместимости
           }
         };
 
@@ -140,13 +140,12 @@ const App = () => {
             urls: 'stun:stun.l.google.com:19302'
           }
         ],
-        iceTransportPolicy: 'relay'
+        iceTransportPolicy: 'all' // Используем и STUN и TURN
       },
       trickle: true,
-      sdpTransform: (sdp) => {
-        return sdp
-          .replace(/a=fmtp:\d+ .*level-asymmetry-allowed=.*\r\n/g, '')
-          .replace(/a=rtcp-fb:\d+ .*\r\n/g, '');
+      offerOptions: {
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
       }
     });
 
