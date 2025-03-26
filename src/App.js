@@ -1,6 +1,14 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import SimplePeer from 'simple-peer';
+
+
+// Добавляем полифиллы в самом начале файла
+if (typeof window !== 'undefined') {
+  window.process = window.process || { nextTick: (fn) => setTimeout(fn, 0) };
+  window.Buffer = window.Buffer || require('buffer').Buffer;
+}
 
 const App = () => {
   const [username, setUsername] = useState('');
@@ -16,7 +24,6 @@ const App = () => {
   const roomId = "1";
   const [isLoading, setIsLoading] = useState(false);
 
-  // Функции для управления медиа
   const toggleMute = () => {
     if (localStreamRef.current) {
       const audioTracks = localStreamRef.current.getAudioTracks();
@@ -87,7 +94,7 @@ const App = () => {
   
     socket.on('userLeft', (leftUserId) => {
       setOtherUsers(prev => prev.filter(id => id !== leftUserId));
-      cleanupPeer(leftUserId);
+      safeCleanupPeer(leftUserId);
     });
   
     socket.on('receiveSignal', ({ senderId, signal }) => {
@@ -102,7 +109,9 @@ const App = () => {
 
     return () => {
       socket.disconnect();
-      Object.values(peersRef.current).forEach(peer => peer.destroy());
+      Object.keys(peersRef.current).forEach(userId => {
+        safeCleanupPeer(userId);
+      });
     };
   }, [isAuthenticated, username]);
 
@@ -176,25 +185,48 @@ const App = () => {
 
     peer.on('error', err => {
       console.error('Peer error:', err);
-      cleanupPeer(userId);
+      safeCleanupPeer(userId);
     });
 
     if (signal) {
-      peer.signal(JSON.parse(signal));
+      try {
+        peer.signal(JSON.parse(signal));
+      } catch (err) {
+        console.error('Error parsing signal:', err);
+        safeCleanupPeer(userId);
+      }
     }
   
     peersRef.current[userId] = peer;
   };
 
-  const cleanupPeer = (userId) => {
-    if (peersRef.current[userId]) {
-      peersRef.current[userId].destroy();
-      delete peersRef.current[userId];
-    }
-    if (remoteVideoRefs.current[userId]) {
-      remoteVideoRefs.current[userId].srcObject = null;
-      remoteVideoRefs.current[userId].remove();
-      delete remoteVideoRefs.current[userId];
+  const safeCleanupPeer = (userId) => {
+    try {
+      if (peersRef.current[userId]) {
+        // Добавляем задержку для безопасного уничтожения
+        setTimeout(() => {
+          try {
+            if (peersRef.current[userId]) {
+              peersRef.current[userId].destroy();
+              delete peersRef.current[userId];
+            }
+          } catch (err) {
+            console.error('Error destroying peer:', err);
+          }
+        }, 100);
+      }
+      
+      if (remoteVideoRefs.current[userId]) {
+        try {
+          remoteVideoRefs.current[userId].srcObject = null;
+          remoteVideoRefs.current[userId].remove();
+          delete remoteVideoRefs.current[userId];
+        } catch (err) {
+          console.error('Error cleaning up video element:', err);
+        }
+      }
+    } catch (err) {
+      console.error('Error in safeCleanupPeer:', err);
     }
   };
 
