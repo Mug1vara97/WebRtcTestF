@@ -30,11 +30,6 @@ const App = () => {
   const iceServers = {
     iceServers: [
       { 
-        urls: 'stun:109.73.198.135:3478',
-        username: 'test',
-        credential: 'test123' 
-      },
-      { 
         urls: 'turn:109.73.198.135:3478',
         username: 'test',
         credential: 'test123' 
