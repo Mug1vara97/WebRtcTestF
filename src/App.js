@@ -1,19 +1,10 @@
+// App.js
 import React, { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import SimplePeer from 'simple-peer';
 
-// Добавьте полифиллы в начале файла
-import { Buffer } from 'buffer';
-import process from 'process';
-import './polyfills';
-
-window.Buffer = Buffer;
-window.process = process;
-
-
-window.process.nextTick = (callback) => {
-  setTimeout(callback, 0);
-};
+window.Buffer = require('buffer').Buffer;
+window.process = require('process');
 
 const App = () => {
   const [username, setUsername] = useState('');
@@ -21,10 +12,10 @@ const App = () => {
   const [otherUsers, setOtherUsers] = useState([]);
   const connectionRef = useRef(null);
   const localVideoRef = useRef(null);
+  const remoteVideoRefs = useRef({});
   const localStreamRef = useRef(null);
   const peersRef = useRef({});
   const roomId = "1";
-  const [remoteStreams, setRemoteStreams] = useState({});
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -60,6 +51,10 @@ const App = () => {
         peersRef.current[leftUserId].destroy();
         delete peersRef.current[leftUserId];
       }
+      if (remoteVideoRefs.current[leftUserId]) {
+        remoteVideoRefs.current[leftUserId].srcObject = null;
+        delete remoteVideoRefs.current[leftUserId];
+      }
     });
   
     socket.on('receiveSignal', ({ senderId, signal }) => {
@@ -91,7 +86,7 @@ const App = () => {
         localStreamRef.current = stream;
         localVideoRef.current.srcObject = stream;
         
-        // Инициируем звонки
+        // Инициируем звонки с уже подключенными пользователями
         otherUsers.forEach(userId => {
           createPeer(userId, true);
         });
@@ -109,13 +104,16 @@ const App = () => {
 
     const peer = new SimplePeer({
       initiator,
-      stream: initiator ? localStreamRef.current : null,
+      stream: localStreamRef.current, // Всегда добавляем свой поток
       config: {
         iceServers: [
           {
             urls: 'turn:109.73.198.135:3478',
-            username: 'test', 
-            credential: 'test123' 
+            username: 'test',
+            credential: 'test123'
+          },
+          {
+            urls: 'stun:stun.l.google.com:19302'
           }
         ]
       },
@@ -130,12 +128,14 @@ const App = () => {
     });
 
     peer.on('stream', stream => {
-      setRemoteStreams(prev => ({
       // Создаем новый элемент video для каждого пользователя
-      ...prev,
-      [userId]: stream
-    }));
-      
+      if (!remoteVideoRefs.current[userId]) {
+        remoteVideoRefs.current[userId] = document.createElement('video');
+        remoteVideoRefs.current[userId].autoplay = true;
+        remoteVideoRefs.current[userId].playsInline = true;
+        document.getElementById('remoteVideosContainer').appendChild(remoteVideoRefs.current[userId]);
+      }
+      remoteVideoRefs.current[userId].srcObject = stream;
     });
 
     peer.on('error', err => {
@@ -144,16 +144,20 @@ const App = () => {
     });
 
     peer.on('close', () => {
-      setRemoteStreams(prev => {
-        const newStreams = { ...prev };
-        delete newStreams[userId];
-        return newStreams;
-      });
+      if (remoteVideoRefs.current[userId]) {
+        remoteVideoRefs.current[userId].srcObject = null;
+        remoteVideoRefs.current[userId].remove();
+        delete remoteVideoRefs.current[userId];
+      }
       delete peersRef.current[userId];
     });
 
     if (signal) {
-      peer.signal(signal);
+      try {
+        peer.signal(JSON.parse(signal));
+      } catch (err) {
+        console.error('Signal parsing error:', err);
+      }
     }
 
     peersRef.current[userId] = peer;
@@ -183,27 +187,22 @@ const App = () => {
       <p>Вы: {username}</p>
       <p>Участники: {otherUsers.length ? otherUsers.join(', ') : 'нет других участников'}</p>
       
-      <div style={{ display: 'flex', gap: '20px', marginTop: '20px', flexWrap: 'wrap' }}>
-        <video 
-          ref={localVideoRef} 
-          autoPlay 
-          muted 
-          playsInline 
-          style={{ width: '300px', border: '1px solid #ccc' }}
-        />
-        
-        {/* Отображаем все удаленные потоки */}
-        {Object.entries(remoteStreams).map(([userId, stream]) => (
-          <video
-            key={userId}
-            autoPlay
-            playsInline
-            ref={el => {
-              if (el) el.srcObject = stream;
-            }}
+      <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
+        <div>
+          <h3>Ваша камера</h3>
+          <video 
+            ref={localVideoRef} 
+            autoPlay 
+            muted 
+            playsInline 
             style={{ width: '300px', border: '1px solid #ccc' }}
           />
-        ))}
+        </div>
+        
+        <div>
+          <h3>Удаленные участники</h3>
+          <div id="remoteVideosContainer" style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }} />
+        </div>
       </div>
     </div>
   );
