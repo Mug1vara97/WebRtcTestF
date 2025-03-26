@@ -25,7 +25,7 @@ const App = () => {
     }
   };
 
-  // Подключение к комнате с оптимизацией
+  // Подключение к комнате
   useEffect(() => {
     if (!isAuthenticated) return;
   
@@ -46,6 +46,15 @@ const App = () => {
     socket.on('usersInRoom', (users) => {
       const filteredUsers = users.filter(user => user !== username);
       setOtherUsers(filteredUsers);
+      
+      // Только новый пользователь инициирует соединения
+      if (localStreamRef.current) {
+        filteredUsers.forEach(userId => {
+          if (!peersRef.current[userId]) {
+            createPeer(userId, true);
+          }
+        });
+      }
     });
   
     socket.on('userJoined', (newUserId) => {
@@ -60,6 +69,7 @@ const App = () => {
     });
   
     socket.on('receiveSignal', ({ senderId, signal }) => {
+      // Только отвечаем на сигналы, не инициируем новые соединения
       if (!peersRef.current[senderId] && localStreamRef.current) {
         createPeer(senderId, false, signal);
       } else if (peersRef.current[senderId]) {
@@ -75,7 +85,7 @@ const App = () => {
     };
   }, [isAuthenticated, username]);
 
-  // Получение медиапотока с оптимизацией
+  // Получение медиапотока
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -98,7 +108,6 @@ const App = () => {
         localStreamRef.current = stream;
         localVideoRef.current.srcObject = stream;
         
-        // Оптимизация видео трека
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
           await videoTrack.applyConstraints({
@@ -113,17 +122,6 @@ const App = () => {
 
     getMediaStream();
   }, [isAuthenticated]);
-
-  // Создание соединений при изменении списка пользователей
-  useEffect(() => {
-    if (!localStreamRef.current) return;
-
-    otherUsers.forEach(userId => {
-      if (!peersRef.current[userId]) {
-        createPeer(userId, true);
-      }
-    });
-  }, [otherUsers]);
 
   const createPeer = (userId, initiator, signal = null) => {
     if (peersRef.current[userId]) return;
@@ -142,11 +140,10 @@ const App = () => {
             urls: 'stun:stun.l.google.com:19302'
           }
         ],
-        iceTransportPolicy: 'relay' // Используем только TURN для стабильности
+        iceTransportPolicy: 'relay'
       },
-      trickle: true, // Включаем trickle ICE для быстрого соединения
+      trickle: true,
       sdpTransform: (sdp) => {
-        // Оптимизация SDP для уменьшения задержки
         return sdp
           .replace(/a=fmtp:\d+ .*level-asymmetry-allowed=.*\r\n/g, '')
           .replace(/a=rtcp-fb:\d+ .*\r\n/g, '');
