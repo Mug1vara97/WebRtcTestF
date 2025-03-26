@@ -9,13 +9,14 @@ window.process = require('process');
 const App = () => {
   const [username, setUsername] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [otherUsers, setOtherUsers] = useState([]);
   const connectionRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
   const localStreamRef = useRef(null);
   const peersRef = useRef({});
   const roomId = "1";
+  const [initialUsers, setInitialUsers] = useState([]);
+  const [otherUsers, setOtherUsers] = useState([]);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -42,7 +43,10 @@ const App = () => {
     });
   
     socket.on('usersInRoom', (users) => {
-      setOtherUsers(users);
+      // Фильтруем текущего пользователя, если он есть
+      const filteredUsers = users.filter(user => user !== username);
+      setInitialUsers(filteredUsers);
+      setOtherUsers(filteredUsers);
     });
   
     socket.on('userJoined', (newUserId) => {
@@ -76,6 +80,14 @@ const App = () => {
       Object.values(peersRef.current).forEach(peer => peer.destroy());
     };
   }, [isAuthenticated, username]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !localStreamRef.current) return;
+  
+    initialUsers.forEach(userId => {
+      createPeer(userId, true);
+    });
+  }, [isAuthenticated, initialUsers]);
 
   // Получение медиапотока с оптимизацией параметров
   useEffect(() => {
@@ -118,7 +130,7 @@ const App = () => {
     };
 
     getMediaStream();
-  }, [isAuthenticated, otherUsers]);
+  }, [isAuthenticated]);
 
   // Создание пира с оптимизацией WebRTC
   const createPeer = (userId, initiator, signal = null) => {
