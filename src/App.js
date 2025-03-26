@@ -106,8 +106,19 @@ const App = () => {
     });
   
     peer.on('signal', data => {
-      connectionRef.current?.invoke("SendSignal", userId, data)
-        .catch(err => console.error("Error sending signal:", err));
+      if (connectionRef.current?.state === 'Connected') {
+        connectionRef.current.invoke("SendSignal", userId, data)
+          .catch(err => {
+            console.error("Error sending signal:", err);
+            setTimeout(() => {
+              if (peer && !peer.destroyed) {
+                peer.signal(data);
+              }
+            }, 1000);
+          });
+      } else {
+        console.warn("Connection not ready, queuing signal");
+      }
     });
   
     peer.on('stream', stream => {
@@ -219,6 +230,26 @@ const App = () => {
         } else if (peersRef.current[senderId]) {
           peersRef.current[senderId].signal(signal);
         }
+      });
+
+      conn.onreconnecting(() => {
+        console.log("Attempting to reconnect...");
+        setConnectionStatus('reconnecting');
+        // Очищаем пиры при переподключении
+        Object.keys(peersRef.current).forEach(userId => {
+          safeCleanupPeer(userId);
+        });
+      });
+      
+      conn.onreconnected(() => {
+        console.log("Reconnected, rejoining room...");
+        setConnectionStatus('connected');
+        // Повторно присоединяемся к комнате после переподключения
+        conn.invoke("JoinRoom", roomId, username)
+          .then(() => {
+            // Заново создаем пиры для всех пользователей в комнате
+            otherUsers.forEach(userId => createPeer(userId, true));
+          });
       });
   
       conn.onclose(() => setConnectionStatus('disconnected'));
