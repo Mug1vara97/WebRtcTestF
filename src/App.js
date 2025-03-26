@@ -1,11 +1,12 @@
+
 import React, { useEffect, useRef, useState } from 'react';
-import { HubConnectionBuilder } from '@microsoft/signalr';
+import { io } from 'socket.io-client';
 import SimplePeer from 'simple-peer';
 
-// Полифиллы для совместимости
+
+// Добавляем полифиллы в самом начале файла
 if (typeof window !== 'undefined') {
-  if (!window.process) window.process = {};
-  window.process.nextTick = window.process.nextTick || ((fn) => setTimeout(fn, 0));
+  window.process = window.process || { nextTick: (fn) => setTimeout(fn, 0) };
   window.Buffer = window.Buffer || require('buffer').Buffer;
 }
 
@@ -15,15 +16,13 @@ const App = () => {
   const [otherUsers, setOtherUsers] = useState([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  
   const connectionRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
   const localStreamRef = useRef(null);
   const peersRef = useRef({});
-  const roomId = "default-room";
+  const roomId = "1";
+  const [isLoading, setIsLoading] = useState(false);
 
   const toggleMute = () => {
     if (localStreamRef.current) {
@@ -53,28 +52,96 @@ const App = () => {
     }
   };
 
-  const getMediaStream = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 }
-        },
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      localStreamRef.current = stream;
-      localVideoRef.current.srcObject = stream;
-    } catch (err) {
-      console.error("Failed to get media stream:", err);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+  
+    const socket = io('https://mug1vara97-webrtcb-1778.twc1.net', {
+      transports: ['websocket'],
+      upgrade: false,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 10000
+    });
+  
+    socket.on('connect', () => {
+      console.log('Socket.IO connected');
+      socket.emit('joinRoom', { roomId, username });
       setIsLoading(false);
-      alert("Не удалось получить доступ к камере/микрофону");
-    }
-  };
+    });
+  
+    socket.on('usersInRoom', (users) => {
+      const filteredUsers = users.filter(user => user !== username);
+      setOtherUsers(filteredUsers);
+      
+      if (localStreamRef.current) {
+        filteredUsers.forEach(userId => {
+          if (!peersRef.current[userId]) {
+            createPeer(userId, true);
+          }
+        });
+      }
+    });
+  
+    socket.on('userJoined', (newUserId) => {
+      if (newUserId !== username && !otherUsers.includes(newUserId)) {
+        setOtherUsers(prev => [...prev, newUserId]);
+        
+        if (localStreamRef.current && !peersRef.current[newUserId]) {
+          createPeer(newUserId, true);
+        }
+      }
+    });
+  
+    socket.on('userLeft', (leftUserId) => {
+      setOtherUsers(prev => prev.filter(id => id !== leftUserId));
+      safeCleanupPeer(leftUserId);
+    });
+  
+    socket.on('receiveSignal', ({ senderId, signal }) => {
+      if (!peersRef.current[senderId] && localStreamRef.current) {
+        createPeer(senderId, false, signal);
+      } else if (peersRef.current[senderId]) {
+        peersRef.current[senderId].signal(signal);
+      }
+    });
+  
+    connectionRef.current = socket;
+
+    return () => {
+      socket.disconnect();
+      Object.keys(peersRef.current).forEach(userId => {
+        safeCleanupPeer(userId);
+      });
+    };
+  }, [isAuthenticated, username]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+  
+    const getMediaStream = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+        localStreamRef.current = stream;
+        localVideoRef.current.srcObject = stream;
+  
+        if (connectionRef.current && otherUsers.length > 0) {
+          otherUsers.forEach(userId => {
+            if (!peersRef.current[userId]) {
+              createPeer(userId, true);
+            }
+          });
+        }
+      } catch (err) {
+        console.error("Failed to get media stream:", err);
+        setIsLoading(false);
+      }
+    };
+  
+    getMediaStream();
+  }, [isAuthenticated]);
 
   const createPeer = (userId, initiator, signal = null) => {
     if (peersRef.current[userId] || !localStreamRef.current) return;
@@ -85,7 +152,9 @@ const App = () => {
       config: {
         iceServers: [
           {
-            urls: 'turn:109.73.198.135:3478'
+            urls: 'stun:109.73.198.135:3478',
+            username: 'test',
+            credential: 'test123'
           },
           {
             urls: 'turn:109.73.198.135:3478',
@@ -98,10 +167,10 @@ const App = () => {
     });
   
     peer.on('signal', data => {
-      if (connectionRef.current?.state === 'Connected') {
-        connectionRef.current.invoke("SendSignal", userId, data)
-          .catch(err => console.error("Error sending signal:", err));
-      }
+      connectionRef.current?.emit('sendSignal', {
+        targetUsername: userId,
+        signal: JSON.stringify(data)
+      });
     });
   
     peer.on('stream', stream => {
@@ -122,85 +191,46 @@ const App = () => {
     });
 
     if (signal) {
-      peer.signal(signal);
+      try {
+        peer.signal(JSON.parse(signal));
+      } catch (err) {
+        console.error('Error parsing signal:', err);
+        safeCleanupPeer(userId);
+      }
     }
   
     peersRef.current[userId] = peer;
   };
 
   const safeCleanupPeer = (userId) => {
-    if (peersRef.current[userId]) {
-      peersRef.current[userId].destroy();
-      delete peersRef.current[userId];
-    }
-    
-    if (remoteVideoRefs.current[userId]) {
-      remoteVideoRefs.current[userId].srcObject = null;
-      remoteVideoRefs.current[userId].remove();
-      delete remoteVideoRefs.current[userId];
+    try {
+      if (peersRef.current[userId]) {
+        // Добавляем задержку для безопасного уничтожения
+        setTimeout(() => {
+          try {
+            if (peersRef.current[userId]) {
+              peersRef.current[userId].destroy();
+              delete peersRef.current[userId];
+            }
+          } catch (err) {
+            console.error('Error destroying peer:', err);
+          }
+        }, 100);
+      }
+      
+      if (remoteVideoRefs.current[userId]) {
+        try {
+          remoteVideoRefs.current[userId].srcObject = null;
+          remoteVideoRefs.current[userId].remove();
+          delete remoteVideoRefs.current[userId];
+        } catch (err) {
+          console.error('Error cleaning up video element:', err);
+        }
+      }
+    } catch (err) {
+      console.error('Error in safeCleanupPeer:', err);
     }
   };
-
-  useEffect(() => {
-    if (!isAuthenticated) return;
-  
-    const startConnection = async () => {
-      await getMediaStream();
-      
-      const conn = new HubConnectionBuilder()
-        .withUrl("https://mug1vara97-webrtcback-3099.twc1.net/webrtc-hub")
-        .withAutomaticReconnect()
-        .build();
-  
-      conn.on("UsersInRoom", users => {
-        setOtherUsers(users);
-        users.forEach(userId => createPeer(userId, true));
-      });
-  
-      conn.on("UserJoined", userId => {
-        setOtherUsers(prev => [...prev, userId]);
-        createPeer(userId, true);
-      });
-  
-      conn.on("UserLeft", userId => {
-        setOtherUsers(prev => prev.filter(id => id !== userId));
-        safeCleanupPeer(userId);
-      });
-  
-      conn.on("ReceiveSignal", (senderId, signal) => {
-        if (!peersRef.current[senderId]) {
-          createPeer(senderId, false, signal);
-        } else {
-          peersRef.current[senderId].signal(signal);
-        }
-      });
-  
-      conn.onclose(() => setConnectionStatus('disconnected'));
-      conn.onreconnecting(() => setConnectionStatus('reconnecting'));
-      conn.onreconnected(() => setConnectionStatus('connected'));
-  
-      try {
-        await conn.start();
-        setConnectionStatus('connected');
-        await conn.invoke("JoinRoom", roomId, username);
-        connectionRef.current = conn;
-        setIsLoading(false);
-      } catch (err) {
-        console.error("Connection failed:", err);
-        setIsLoading(false);
-      }
-    };
-  
-    startConnection();
-  
-    return () => {
-      connectionRef.current?.stop();
-      Object.values(peersRef.current).forEach(peer => peer.destroy());
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [isAuthenticated, username]);
 
   if (!isAuthenticated) {
     return (
@@ -229,15 +259,35 @@ const App = () => {
       <p>Участники: {otherUsers.length ? otherUsers.join(', ') : 'нет других участников'}</p>
       
       <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
-        <button onClick={toggleMute} style={{ backgroundColor: isMuted ? 'red' : 'green' }}>
+        <button
+          onClick={toggleMute}
+          style={{
+            backgroundColor: isMuted ? '#ff4444' : '#4CAF50',
+            color: 'white',
+            padding: '8px 16px',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
+        >
           {isMuted ? 'Включить микрофон' : 'Выключить микрофон'}
         </button>
-        <button onClick={toggleVideo} style={{ backgroundColor: isVideoOff ? 'red' : 'green' }}>
+        <button
+          onClick={toggleVideo}
+          style={{
+            backgroundColor: isVideoOff ? '#ff4444' : '#4CAF50',
+            color: 'white',
+            padding: '8px 16px',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
+        >
           {isVideoOff ? 'Включить камеру' : 'Выключить камеру'}
         </button>
       </div>
       
-      <div style={{ display: 'flex', gap: '20px' }}>
+      <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
         <div>
           <h3>Ваша камера</h3>
           <video 
@@ -247,15 +297,28 @@ const App = () => {
             playsInline 
             style={{ 
               width: '300px', 
+              border: '1px solid #ccc',
               display: isVideoOff ? 'none' : 'block'
             }}
           />
-          {isVideoOff && <div>Камера выключена</div>}
+          {isVideoOff && (
+            <div style={{
+              width: '300px',
+              height: '225px',
+              backgroundColor: '#f0f0f0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '1px solid #ccc'
+            }}>
+              Камера выключена
+            </div>
+          )}
         </div>
         
         <div>
-          <h3>Участники</h3>
-          <div id="remoteVideosContainer" style={{ display: 'flex', gap: '20px' }} />
+          <h3>Удаленные участники</h3>
+          <div id="remoteVideosContainer" style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }} />
         </div>
       </div>
     </div>
