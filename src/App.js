@@ -112,8 +112,10 @@ const App = () => {
       stream: initiator ? localStreamRef.current : null,
       config: {
         iceServers: [
-          { 
-            urls: 'turn:109.73.198.135:3478'
+          {
+            urls: 'turn:109.73.198.135:3478',
+            username: 'test', 
+            credential: 'test123' 
           }
         ]
       },
