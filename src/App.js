@@ -1,29 +1,32 @@
-
 import React, { useEffect, useRef, useState } from 'react';
-import { io } from 'socket.io-client';
+import { HubConnectionBuilder } from '@microsoft/signalr';
 import SimplePeer from 'simple-peer';
 
-
-// Добавляем полифиллы в самом начале файла
+// Полифиллы для совместимости
 if (typeof window !== 'undefined') {
   window.process = window.process || { nextTick: (fn) => setTimeout(fn, 0) };
   window.Buffer = window.Buffer || require('buffer').Buffer;
 }
 
 const App = () => {
+  // Состояния приложения
   const [username, setUsername] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [otherUsers, setOtherUsers] = useState([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('disconnected');
+  
+  // Рефы для DOM элементов и данных
   const connectionRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
   const localStreamRef = useRef(null);
   const peersRef = useRef({});
-  const roomId = "1";
-  const [isLoading, setIsLoading] = useState(false);
+  const roomId = "default-room";
 
+  // Обработчики UI
   const toggleMute = () => {
     if (localStreamRef.current) {
       const audioTracks = localStreamRef.current.getAudioTracks();
@@ -52,97 +55,33 @@ const App = () => {
     }
   };
 
-  useEffect(() => {
-    if (!isAuthenticated) return;
-  
-    const socket = io('https://mug1vara97-webrtcb-1778.twc1.net', {
-      transports: ['websocket'],
-      upgrade: false,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 10000
-    });
-  
-    socket.on('connect', () => {
-      console.log('Socket.IO connected');
-      socket.emit('joinRoom', { roomId, username });
-      setIsLoading(false);
-    });
-  
-    socket.on('usersInRoom', (users) => {
-      const filteredUsers = users.filter(user => user !== username);
-      setOtherUsers(filteredUsers);
+  // Инициализация медиапотока
+  const getMediaStream = async () => {
+    try {
+      const constraints = {
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      };
       
-      if (localStreamRef.current) {
-        filteredUsers.forEach(userId => {
-          if (!peersRef.current[userId]) {
-            createPeer(userId, true);
-          }
-        });
-      }
-    });
-  
-    socket.on('userJoined', (newUserId) => {
-      if (newUserId !== username && !otherUsers.includes(newUserId)) {
-        setOtherUsers(prev => [...prev, newUserId]);
-        
-        if (localStreamRef.current && !peersRef.current[newUserId]) {
-          createPeer(newUserId, true);
-        }
-      }
-    });
-  
-    socket.on('userLeft', (leftUserId) => {
-      setOtherUsers(prev => prev.filter(id => id !== leftUserId));
-      safeCleanupPeer(leftUserId);
-    });
-  
-    socket.on('receiveSignal', ({ senderId, signal }) => {
-      if (!peersRef.current[senderId] && localStreamRef.current) {
-        createPeer(senderId, false, signal);
-      } else if (peersRef.current[senderId]) {
-        peersRef.current[senderId].signal(signal);
-      }
-    });
-  
-    connectionRef.current = socket;
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStreamRef.current = stream;
+      localVideoRef.current.srcObject = stream;
+    } catch (err) {
+      console.error("Failed to get media stream:", err);
+      setIsLoading(false);
+      alert("Не удалось получить доступ к камере/микрофону. Пожалуйста, проверьте разрешения.");
+    }
+  };
 
-    return () => {
-      socket.disconnect();
-      Object.keys(peersRef.current).forEach(userId => {
-        safeCleanupPeer(userId);
-      });
-    };
-  }, [isAuthenticated, username]);
-
-  useEffect(() => {
-    if (!isAuthenticated) return;
-  
-    const getMediaStream = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true
-        });
-        localStreamRef.current = stream;
-        localVideoRef.current.srcObject = stream;
-  
-        if (connectionRef.current && otherUsers.length > 0) {
-          otherUsers.forEach(userId => {
-            if (!peersRef.current[userId]) {
-              createPeer(userId, true);
-            }
-          });
-        }
-      } catch (err) {
-        console.error("Failed to get media stream:", err);
-        setIsLoading(false);
-      }
-    };
-  
-    getMediaStream();
-  }, [isAuthenticated]);
-
+  // Создание пира WebRTC
   const createPeer = (userId, initiator, signal = null) => {
     if (peersRef.current[userId] || !localStreamRef.current) return;
   
@@ -151,12 +90,12 @@ const App = () => {
       stream: localStreamRef.current,
       config: {
         iceServers: [
-          {
+          { 
             urls: 'stun:109.73.198.135:3478',
             username: 'test',
-            credential: 'test123',
+            credential: 'test123'
           },
-          {
+          { 
             urls: 'turn:109.73.198.135:3478',
             username: 'test',
             credential: 'test123'
@@ -167,22 +106,35 @@ const App = () => {
     });
   
     peer.on('signal', data => {
-      connectionRef.current?.emit('sendSignal', {
-        targetUsername: userId,
-        signal: JSON.stringify(data)
-      });
+      connectionRef.current?.invoke("SendSignal", userId, data)
+        .catch(err => console.error("Error sending signal:", err));
     });
   
     peer.on('stream', stream => {
       if (!remoteVideoRefs.current[userId]) {
+        const videoContainer = document.getElementById('remoteVideosContainer');
+        const videoWrapper = document.createElement('div');
+        videoWrapper.className = 'remote-video-wrapper';
+        
         const videoElement = document.createElement('video');
         videoElement.autoplay = true;
         videoElement.playsInline = true;
-        videoElement.style.width = '300px';
-        remoteVideoRefs.current[userId] = videoElement;
-        document.getElementById('remoteVideosContainer').appendChild(videoElement);
+        videoElement.className = 'remote-video';
+        
+        const usernameLabel = document.createElement('div');
+        usernameLabel.className = 'remote-username';
+        usernameLabel.textContent = userId;
+        
+        videoWrapper.appendChild(videoElement);
+        videoWrapper.appendChild(usernameLabel);
+        videoContainer.appendChild(videoWrapper);
+        
+        remoteVideoRefs.current[userId] = {
+          element: videoElement,
+          wrapper: videoWrapper
+        };
       }
-      remoteVideoRefs.current[userId].srcObject = stream;
+      remoteVideoRefs.current[userId].element.srcObject = stream;
     });
 
     peer.on('error', err => {
@@ -190,9 +142,13 @@ const App = () => {
       safeCleanupPeer(userId);
     });
 
+    peer.on('close', () => {
+      safeCleanupPeer(userId);
+    });
+
     if (signal) {
       try {
-        peer.signal(JSON.parse(signal));
+        peer.signal(signal);
       } catch (err) {
         console.error('Error parsing signal:', err);
         safeCleanupPeer(userId);
@@ -202,49 +158,196 @@ const App = () => {
     peersRef.current[userId] = peer;
   };
 
+  // Безопасное удаление пира
   const safeCleanupPeer = (userId) => {
     try {
       if (peersRef.current[userId]) {
-        // Добавляем задержку для безопасного уничтожения
-        setTimeout(() => {
-          try {
-            if (peersRef.current[userId]) {
-              peersRef.current[userId].destroy();
-              delete peersRef.current[userId];
-            }
-          } catch (err) {
-            console.error('Error destroying peer:', err);
-          }
-        }, 100);
+        peersRef.current[userId].destroy();
+        delete peersRef.current[userId];
       }
       
       if (remoteVideoRefs.current[userId]) {
-        try {
-          remoteVideoRefs.current[userId].srcObject = null;
-          remoteVideoRefs.current[userId].remove();
-          delete remoteVideoRefs.current[userId];
-        } catch (err) {
-          console.error('Error cleaning up video element:', err);
+        const { wrapper } = remoteVideoRefs.current[userId];
+        if (wrapper && wrapper.parentNode) {
+          wrapper.parentNode.removeChild(wrapper);
         }
+        delete remoteVideoRefs.current[userId];
       }
     } catch (err) {
       console.error('Error in safeCleanupPeer:', err);
     }
   };
 
+  // Подключение к SignalR Hub
+  useEffect(() => {
+    if (!isAuthenticated) return;
+  
+    const startConnection = async () => {
+      await getMediaStream();
+      
+      const conn = new HubConnectionBuilder()
+        .withUrl("https://mug1vara97-webrtcback-3099.twc1.net/webrtc-hub")
+        .withAutomaticReconnect({
+          nextRetryDelayInMilliseconds: (retryContext) => {
+            if (retryContext.elapsedMilliseconds < 60000) {
+              return 2000;
+            }
+            return null;
+          }
+        })
+        .configureLogging("info")
+        .build();
+  
+      conn.on("UsersInRoom", users => {
+        setOtherUsers(users);
+        users.forEach(userId => createPeer(userId, true));
+      });
+  
+      conn.on("UserJoined", userId => {
+        setOtherUsers(prev => [...prev, userId]);
+        if (localStreamRef.current) createPeer(userId, true);
+      });
+  
+      conn.on("UserLeft", userId => {
+        setOtherUsers(prev => prev.filter(id => id !== userId));
+        safeCleanupPeer(userId);
+      });
+  
+      conn.on("ReceiveSignal", (senderId, signal) => {
+        if (!peersRef.current[senderId] && localStreamRef.current) {
+          createPeer(senderId, false, signal);
+        } else if (peersRef.current[senderId]) {
+          peersRef.current[senderId].signal(signal);
+        }
+      });
+  
+      conn.onclose(() => setConnectionStatus('disconnected'));
+      conn.onreconnecting(() => setConnectionStatus('reconnecting'));
+      conn.onreconnected(() => setConnectionStatus('connected'));
+  
+      try {
+        await conn.start();
+        setConnectionStatus('connected');
+        await conn.invoke("JoinRoom", roomId, username);
+        connectionRef.current = conn;
+        setIsLoading(false);
+      } catch (err) {
+        console.error("Connection failed:", err);
+        setIsLoading(false);
+        setConnectionStatus('failed');
+      }
+    };
+  
+    startConnection();
+  
+    return () => {
+      connectionRef.current?.stop();
+      Object.keys(peersRef.current).forEach(userId => {
+        safeCleanupPeer(userId);
+      });
+      
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+    };
+  }, [isAuthenticated, username]);
+
+  // Стили компонента
+  const styles = {
+    container: {
+      maxWidth: '1200px',
+      margin: '0 auto',
+      padding: '20px',
+      fontFamily: 'Arial, sans-serif'
+    },
+    loginForm: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '10px',
+      maxWidth: '400px',
+      margin: '0 auto',
+      padding: '20px',
+      borderRadius: '8px',
+      boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+    },
+    input: {
+      padding: '10px',
+      borderRadius: '4px',
+      border: '1px solid #ddd',
+      fontSize: '16px'
+    },
+    button: {
+      padding: '10px 15px',
+      borderRadius: '4px',
+      border: 'none',
+      backgroundColor: '#4a76a8',
+      color: 'white',
+      fontSize: '16px',
+      cursor: 'pointer',
+      transition: 'background-color 0.3s',
+      ':disabled': {
+        backgroundColor: '#cccccc',
+        cursor: 'not-allowed'
+      }
+    },
+    controlButtons: {
+      display: 'flex',
+      gap: '10px',
+      margin: '20px 0'
+    },
+    controlButton: (active) => ({
+      padding: '8px 16px',
+      border: 'none',
+      borderRadius: '4px',
+      backgroundColor: active ? '#4CAF50' : '#f44336',
+      color: 'white',
+      cursor: 'pointer'
+    }),
+    videoContainer: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '20px',
+      marginTop: '20px'
+    },
+    localVideoWrapper: {
+      position: 'relative',
+      marginBottom: '20px'
+    },
+    remoteVideosContainer: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '20px'
+    },
+    statusIndicator: {
+      padding: '5px 10px',
+      borderRadius: '4px',
+      backgroundColor: connectionStatus === 'connected' ? '#4CAF50' : 
+                     connectionStatus === 'reconnecting' ? '#FFC107' : '#F44336',
+      color: 'white',
+      display: 'inline-block',
+      marginLeft: '10px'
+    }
+  };
+
   if (!isAuthenticated) {
     return (
-      <div style={{ padding: '20px' }}>
+      <div style={styles.container}>
         <h2>Вход в видеокомнату</h2>
-        <form onSubmit={handleLogin}>
+        <form onSubmit={handleLogin} style={styles.loginForm}>
           <input
             type="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="Введите ваше имя"
             required
+            style={styles.input}
           />
-          <button type="submit" disabled={isLoading}>
+          <button 
+            type="submit" 
+            disabled={isLoading}
+            style={styles.button}
+          >
             {isLoading ? 'Подключение...' : 'Войти'}
           </button>
         </form>
@@ -253,42 +356,36 @@ const App = () => {
   }
 
   return (
-    <div style={{ padding: '20px' }}>
-      <h2>Комната #{roomId}</h2>
-      <p>Вы: {username}</p>
-      <p>Участники: {otherUsers.length ? otherUsers.join(', ') : 'нет других участников'}</p>
+    <div style={styles.container}>
+      <h2>Комната: {roomId} 
+        <span style={styles.statusIndicator}>
+          {connectionStatus === 'connected' ? 'Подключено' : 
+           connectionStatus === 'reconnecting' ? 'Переподключение...' : 'Отключено'}
+        </span>
+      </h2>
       
-      <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <p>Вы: <strong>{username}</strong></p>
+        <p>Участники: {otherUsers.length ? otherUsers.join(', ') : 'нет других участников'}</p>
+      </div>
+      
+      <div style={styles.controlButtons}>
         <button
           onClick={toggleMute}
-          style={{
-            backgroundColor: isMuted ? '#ff4444' : '#4CAF50',
-            color: 'white',
-            padding: '8px 16px',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer'
-          }}
+          style={styles.controlButton(!isMuted)}
         >
           {isMuted ? 'Включить микрофон' : 'Выключить микрофон'}
         </button>
         <button
           onClick={toggleVideo}
-          style={{
-            backgroundColor: isVideoOff ? '#ff4444' : '#4CAF50',
-            color: 'white',
-            padding: '8px 16px',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer'
-          }}
+          style={styles.controlButton(!isVideoOff)}
         >
           {isVideoOff ? 'Включить камеру' : 'Выключить камеру'}
         </button>
       </div>
       
-      <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
-        <div>
+      <div style={styles.videoContainer}>
+        <div style={styles.localVideoWrapper}>
           <h3>Ваша камера</h3>
           <video 
             ref={localVideoRef} 
@@ -297,7 +394,9 @@ const App = () => {
             playsInline 
             style={{ 
               width: '300px', 
-              border: '1px solid #ccc',
+              height: '225px',
+              backgroundColor: '#000',
+              borderRadius: '8px',
               display: isVideoOff ? 'none' : 'block'
             }}
           />
@@ -309,16 +408,20 @@ const App = () => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              border: '1px solid #ccc'
+              borderRadius: '8px',
+              border: '1px solid #ddd'
             }}>
               Камера выключена
             </div>
           )}
         </div>
         
-        <div>
-          <h3>Удаленные участники</h3>
-          <div id="remoteVideosContainer" style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }} />
+        <div style={{ flex: 1 }}>
+          <h3>Участники ({otherUsers.length})</h3>
+          <div 
+            id="remoteVideosContainer" 
+            style={styles.remoteVideosContainer}
+          />
         </div>
       </div>
     </div>
