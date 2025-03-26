@@ -152,7 +152,7 @@ const App = () => {
       config: {
         iceServers: [
           {
-            urls: 'turn:109.73.198.135:3478',
+            urls: 'stun:109.73.198.135:3478',
             username: 'test',
             credential: 'test123'
           },
